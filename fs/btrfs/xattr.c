@@ -42,6 +42,15 @@ ssize_t __btrfs_getxattr(struct inode *inode, const char *name,
 	int ret = 0;
 	unsigned long data_ptr;
 
+	if (root->context &&
+			!strncmp(name, XATTR_SECURITY_PREFIX, XATTR_SECURITY_PREFIX_LEN) && 
+			security_ismaclabel(name + XATTR_SECURITY_PREFIX_LEN)) {
+		size_t len = strlen(root->context)+1;
+		if (len > size)
+			return -ERANGE;
+		memcpy(buffer, root->context, len);
+		return len;
+	}
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
@@ -401,6 +410,15 @@ ssize_t btrfs_getxattr(struct dentry *dentry, const char *name,
 	int ret;
 
 	/*
+	 * * Do not permit setting MAC label if using a subvol_context= mount.
+	 */
+	struct btrfs_root *root = BTRFS_I(d_inode(dentry))->root;
+	if (root->context &&
+	   !strncmp(name, XATTR_SECURITY_PREFIX, XATTR_SECURITY_PREFIX_LEN) &&
+	   security_ismaclabel(name + XATTR_SECURITY_PREFIX_LEN))
+		return -EOPNOTSUPP;
+
+	/*
 	 * If this is a request for a synthetic attribute in the system.*
 	 * namespace use the generic infrastructure to resolve a handler
 	 * for it via sb->s_xattr.
@@ -485,12 +503,19 @@ int btrfs_removexattr(struct dentry *dentry, const char *name)
 static int btrfs_initxattrs(struct inode *inode,
 			    const struct xattr *xattr_array, void *fs_info)
 {
+	struct btrfs_root *root = BTRFS_I(inode)->root;
 	const struct xattr *xattr;
 	struct btrfs_trans_handle *trans = fs_info;
 	char *name;
 	int err = 0;
 
 	for (xattr = xattr_array; xattr->name != NULL; xattr++) {
+		/*
+		 * Do not set MAC label if using a subvol_context= mount.
+		 */
+		if (root->context &&
+		    security_ismaclabel(xattr->name))
+			continue;
 		name = kmalloc(XATTR_SECURITY_PREFIX_LEN +
 			       strlen(xattr->name) + 1, GFP_NOFS);
 		if (!name) {

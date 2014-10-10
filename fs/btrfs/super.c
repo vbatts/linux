@@ -24,6 +24,7 @@
 #include <linux/highmem.h>
 #include <linux/time.h>
 #include <linux/init.h>
+#include <linux/security.h>
 #include <linux/seq_file.h>
 #include <linux/string.h>
 #include <linux/backing-dev.h>
@@ -319,7 +320,7 @@ enum {
 	Opt_check_integrity_print_mask, Opt_fatal_errors, Opt_rescan_uuid_tree,
 	Opt_commit_interval, Opt_barrier, Opt_nodefrag, Opt_nodiscard,
 	Opt_noenospc_debug, Opt_noflushoncommit, Opt_acl, Opt_datacow,
-	Opt_datasum, Opt_treelog, Opt_noinode_cache,
+	Opt_datasum, Opt_treelog, Opt_noinode_cache, Opt_subvol_context,
 	Opt_err,
 };
 
@@ -372,6 +373,7 @@ static match_table_t tokens = {
 	{Opt_rescan_uuid_tree, "rescan_uuid_tree"},
 	{Opt_fatal_errors, "fatal_errors=%s"},
 	{Opt_commit_interval, "commit=%d"},
+	{Opt_subvol_context, "subvol_context=%s"},
 	{Opt_err, NULL},
 };
 
@@ -422,6 +424,7 @@ int btrfs_parse_options(struct btrfs_root *root, char *options)
 		case Opt_subvol:
 		case Opt_subvolid:
 		case Opt_subvolrootid:
+		case Opt_subvol_context:
 		case Opt_device:
 			/*
 			 * These are parsed by btrfs_parse_early_options
@@ -761,7 +764,7 @@ out:
  */
 static int btrfs_parse_early_options(const char *options, fmode_t flags,
 		void *holder, char **subvol_name, u64 *subvol_objectid,
-		struct btrfs_fs_devices **fs_devices)
+		char **subvol_context, struct btrfs_fs_devices **fs_devices)
 {
 	substring_t args[MAX_OPT_ARGS];
 	char *device_name, *opts, *orig, *p;
@@ -813,6 +816,14 @@ static int btrfs_parse_early_options(const char *options, fmode_t flags,
 			printk(KERN_WARNING
 				"BTRFS: 'subvolrootid' mount option is deprecated and has "
 				"no effect\n");
+			break;
+		case Opt_subvol_context:
+			kfree(*subvol_context);
+			*subvol_context = match_strdup(&args[0]);
+			if (!*subvol_context) {
+				error = -ENOMEM;
+				goto out;
+			}
 			break;
 		case Opt_device:
 			device_name = match_strdup(&args[0]);
@@ -1259,7 +1270,7 @@ static char *setup_root_args(char *args)
 
 static struct dentry *mount_subvol(const char *subvol_name, u64 subvol_objectid,
 				   int flags, const char *device_name,
-				   char *data)
+				   char *data, char *subvol_context)
 {
 	struct dentry *root;
 	struct vfsmount *mnt = NULL;
@@ -1351,6 +1362,24 @@ static struct dentry *mount_subvol(const char *subvol_name, u64 subvol_objectid,
 			deactivate_locked_super(s);
 		}
 	}
+	if (!IS_ERR(root)) {
+		struct super_block *s = root->d_sb;
+		struct btrfs_root *btrfs_root = BTRFS_I(root->d_inode)->root;
+		int r;
+		btrfs_root->context = subvol_context;
+		if (subvol_context) {
+			r = security_inode_notifysecctx(root->d_inode,
+							subvol_context,
+							strlen(subvol_context));
+			if (r < 0) {
+				dput(root);
+				root = ERR_PTR(r);
+				deactivate_locked_super(s);
+				printk(KERN_ERR "BTRFS: Could not set subvol_context on subvol '%s\n",
+					subvol_name);
+			}
+		}
+	}
 
 out:
 	mntput(mnt);
@@ -1425,6 +1454,7 @@ static struct dentry *btrfs_mount(struct file_system_type *fs_type, int flags,
 	struct security_mnt_opts new_sec_opts;
 	fmode_t mode = FMODE_READ;
 	char *subvol_name = NULL;
+	char *subvol_context = NULL;
 	u64 subvol_objectid = 0;
 	int error = 0;
 
@@ -1433,16 +1463,22 @@ static struct dentry *btrfs_mount(struct file_system_type *fs_type, int flags,
 
 	error = btrfs_parse_early_options(data, mode, fs_type,
 					  &subvol_name, &subvol_objectid,
+					  &subvol_context,
 					  &fs_devices);
 	if (error) {
 		kfree(subvol_name);
+		kfree(subvol_context);
 		return ERR_PTR(error);
 	}
 
 	if (subvol_name || subvol_objectid != BTRFS_FS_TREE_OBJECTID) {
 		/* mount_subvol() will free subvol_name. */
-		return mount_subvol(subvol_name, subvol_objectid, flags,
-				    device_name, data);
+		char *root;
+		root = mount_subvol(subvol_name, subvol_objectid, flags,
+				    device_name, data, subvol_context);
+		if (IS_ERR(root))
+			kfree(subvol_context);
+		return root;
 	}
 
 	security_init_mnt_opts(&new_sec_opts);

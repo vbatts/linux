@@ -1229,6 +1229,7 @@ static void __setup_root(u32 nodesize, u32 sectorsize, u32 stripesize,
 	root->nr_delalloc_inodes = 0;
 	root->nr_ordered_extents = 0;
 	root->name = NULL;
+	root->context = NULL;
 	root->inode_tree = RB_ROOT;
 	INIT_RADIX_TREE(&root->delayed_nodes_tree, GFP_ATOMIC);
 	root->block_rsv = NULL;
@@ -3656,6 +3657,7 @@ static void free_fs_root(struct btrfs_root *root)
 	kfree(root->free_ino_ctl);
 	kfree(root->free_ino_pinned);
 	kfree(root->name);
+	kfree(root->context);
 	btrfs_put_fs_root(root);
 }
 
