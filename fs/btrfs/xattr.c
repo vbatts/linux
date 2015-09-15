@@ -358,6 +358,9 @@ const struct xattr_handler *btrfs_xattr_handlers[] = {
 	&posix_acl_access_xattr_handler,
 	&posix_acl_default_xattr_handler,
 #endif
+#ifdef CONFIG_BTRFS_FS_SECURITY
+	&btrfs_xattr_security_handler,
+#endif
 	NULL,
 };
 

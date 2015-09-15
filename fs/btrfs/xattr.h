@@ -22,6 +22,7 @@
 #include <linux/xattr.h>
 
 extern const struct xattr_handler *btrfs_xattr_handlers[];
+extern const struct xattr_handler btrfs_xattr_security_handler;
 
 extern ssize_t __btrfs_getxattr(struct inode *inode, const char *name,
 		void *buffer, size_t size);
